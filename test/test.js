@@ -1,0 +1,1 @@
+const user = { name: 'Default User' }; function test() { console.log(user.name); }
