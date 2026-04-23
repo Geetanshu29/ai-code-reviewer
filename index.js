@@ -1,24 +1,37 @@
 import fs from "fs";
+import path from "path";
 import readline from "readline";
-import { program } from "commander";
-import { callAI } from "./openrouter.js";
 import { getAllFiles } from "./fileScanner.js";
-import { showDiff } from "./diffViewer.js";
+import { callAI } from "./openrouter.js";
 
-// ================= CLI =================
-program
-  .option("--path <path>", "file or folder path", "./test") // default test folder
-  .option("--fix", "apply fixes")
-  .option("--dry", "dry run");
+// ===== CLI OPTIONS PARSE =====
+const args = process.argv.slice(2);
 
-program.parse();
-const options = program.opts();
+const options = {
+  path: ".",
+  fix: false,
+  fixAll: false,
+  dry: false,
+};
 
-// ================= INPUT =================
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--path") options.path = args[i + 1];
+  if (args[i] === "--fix") options.fix = true;
+  if (args[i] === "--fix-all") options.fixAll = true;
+  if (args[i] === "--dry") options.dry = true;
+}
+
+// ===== CONFLICT CHECK =====
+if (options.fix && options.fixAll) {
+  console.log("❌ Cannot use --fix and --fix-all together");
+  process.exit(1);
+}
+
+// ===== ASK USER =====
 function askUser(question) {
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout
+    output: process.stdout,
   });
 
   return new Promise((resolve) =>
@@ -29,161 +42,143 @@ function askUser(question) {
   );
 }
 
-// ================= SAFE JSON =================
-function safeParseJSON(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]);
-      } catch {}
-    }
-  }
-  return null;
-}
+// ===== STATS =====
+let totalFiles = 0;
+let totalIssues = 0;
+let high = 0,
+  medium = 0,
+  low = 0;
 
-// ================= SAFE FORMAT =================
-function formatIssues(issues) {
-  if (!issues || issues.length === 0) {
-    console.log("✅ No major issues found");
-    return;
-  }
+let report = [];
 
-  for (const issue of issues) {
-    const type = issue.type || "unknown";
-    const severity = issue.severity || "low";
-    const description = issue.description || "No description";
-    const fix = issue.fix || "No fix provided";
-
-    let icon = "🟡";
-
-    if (severity === "high") icon = "🔴";
-    else if (severity === "medium") icon = "🟠";
-
-    console.log(`\n${icon} ${type.toUpperCase()} (${severity.toUpperCase()})`);
-    console.log(`- ${description}`);
-    console.log(`✔ Fix: ${fix}`);
-  }
-}
-
-// ================= PARALLEL =================
-async function processWithLimit(items, limit, handler) {
-  let index = 0;
-
-  async function worker() {
-    while (index < items.length) {
-      const i = index++;
-      await handler(items[i]);
-    }
-  }
-
-  const workers = Array.from({ length: limit }, worker);
-  await Promise.all(workers);
-}
-
-// ================= MAIN =================
+// ===== MAIN =====
 async function run() {
-  console.log("🔍 Scanning...\n");
-
-  if (options.fix && options.dry) {
-    console.log("❌ Cannot use --fix and --dry together");
-    return;
-  }
+  console.log("🔍 Scanning files...\n");
 
   let files = [];
 
-  if (fs.existsSync(options.path)) {
-    const stat = fs.statSync(options.path);
-
-    if (stat.isFile()) {
-      files = [options.path];
-    } else {
-      files = getAllFiles(options.path);
-    }
-  } else {
+  if (!fs.existsSync(options.path)) {
     console.log("❌ Path does not exist");
     return;
   }
 
-  if (files.length === 0) {
-    console.log("⚠️ No files found");
-    return;
+  const stat = fs.statSync(options.path);
+
+  if (stat.isFile()) {
+    files = [options.path];
+  } else {
+    files = getAllFiles(options.path);
   }
 
-  await processWithLimit(files, 3, async (file) => {
+  for (const file of files) {
     try {
       const code = fs.readFileSync(file, "utf-8");
 
-      console.log("\n=================================");
-      console.log(`📄 File: ${file}`);
-      console.log("=================================");
+      console.log(`\n📄 File: ${file}`);
 
       const messages = [
         {
           role: "system",
-          content: `
-You are a strict senior code reviewer.
-
-Return ONLY JSON:
+          content: `You are a strict code reviewer. Return ONLY JSON in this format:
 {
-  "issues": [...],
-  "fixed_code": "..."
-}
-`
+  "issues": [
+    {
+      "type": "bug",
+      "severity": "high",
+      "description": "...",
+      "fix": "..."
+    }
+  ],
+  "fixedCode": "..."
+}`,
         },
         {
           role: "user",
-          content: `Review and fix this file:\n\n${code}`
-        }
+          content: code,
+        },
       ];
 
-      let parsed = null;
+      const result = await callAI(messages);
 
-      for (let i = 1; i <= 3; i++) {
-        console.log(`🤖 Attempt ${i}...`);
-        const res = await callAI(messages);
-        parsed = safeParseJSON(res);
-        if (parsed) break;
+      let parsed;
+      try {
+        parsed = JSON.parse(result);
+      } catch {
+        console.log("❌ Invalid JSON from AI");
+        continue;
       }
 
-      if (!parsed) {
-        console.log("❌ Failed to parse AI response");
-        return;
+      const issues = parsed.issues || [];
+      const fixedCode = parsed.fixedCode || code;
+
+      totalFiles++;
+
+      if (issues.length === 0) {
+        console.log("✅ No issues found");
+        continue;
       }
 
-      console.log("\n📊 Issues:");
-      formatIssues(parsed.issues);
+      console.log("⚠️ Issues:");
 
-      const fixedCode = parsed.fixed_code;
+      issues.forEach((i) => {
+        totalIssues++;
+        if (i.severity === "high") high++;
+        else if (i.severity === "medium") medium++;
+        else low++;
 
-      if (!fixedCode || fixedCode.length < code.length * 0.5) {
-        console.log("⚠️ Bad fix, skipping...");
-        return;
-      }
+        console.log(
+          `- ${i.type || "unknown"} (${i.severity || "low"}): ${
+            i.description
+          }`
+        );
+      });
 
-      showDiff(code, fixedCode);
+      report.push({
+        file,
+        issues,
+      });
 
+      // ===== DRY MODE =====
       if (options.dry) {
-        console.log("🧪 Dry run");
-        return;
+        console.log("🧪 Dry run - no changes applied");
+        continue;
       }
 
-      if (options.fix) {
-        const ans = await askUser("\nApply fix? (y/n): ");
+      // ===== FIX ALL =====
+      if (options.fixAll) {
+        const backupPath = file + ".bak";
+        fs.writeFileSync(backupPath, code, "utf-8");
+
+        fs.writeFileSync(file, fixedCode, "utf-8");
+        console.log("⚡ Auto-fixed (backup created)");
+      }
+
+      // ===== MANUAL FIX =====
+      else if (options.fix) {
+        const ans = await askUser("Apply fix? (y/n): ");
 
         if (ans.toLowerCase() === "y") {
+          const backupPath = file + ".bak";
+          fs.writeFileSync(backupPath, code, "utf-8");
+
           fs.writeFileSync(file, fixedCode, "utf-8");
-          console.log("✅ Updated");
+          console.log("✅ Updated (backup created)");
         }
       }
-
     } catch (err) {
       console.log(`❌ Error in ${file}`);
       console.log(err.message);
     }
-  });
+  }
+
+  // ===== FINAL REPORT =====
+  console.log("\n📊 FINAL REPORT");
+  console.log(`Files: ${totalFiles}`);
+  console.log(`Issues: ${totalIssues}`);
+  console.log(`High: ${high} | Medium: ${medium} | Low: ${low}`);
+
+  fs.writeFileSync("report.json", JSON.stringify(report, null, 2));
+  console.log("📁 Report saved as report.json");
 }
 
 run();

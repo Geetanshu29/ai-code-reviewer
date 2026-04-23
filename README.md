@@ -1,43 +1,64 @@
-# 🧠 AI Code Reviewer CLI
+# 🧠 AI Code Reviewer CLI (Auto Fix + Multi-file Support)
 
-An AI-powered CLI tool that analyzes and fixes code automatically.
+AI-powered CLI tool that scans, reviews, and fixes code using LLMs.
+
+---
 
 ## 🚀 Features
 
-* Multi-file scanning
-* AI-based bug detection
-* Auto-fix mode
-* Parallel processing
-* JSON report generation
+* 🔍 AI code analysis
+* ⚡ Auto-fix mode
+* 📁 Multi-file scanning
+* 📊 Summary report
+* 🛡️ Backup system
+
+---
 
 ## 📦 Installation
 
 npm install
 
+---
+
 ## 🔑 Setup
 
-Create `.env` file:
+Create `.env`:
 
-OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_API_KEY=your_key_here
+
+---
 
 ## ▶️ Usage
 
-### Dry Run
-
+Dry run:
 node index.js --path ./test --dry
 
-### Manual Fix
-
+Fix manually:
 node index.js --path ./test --fix
 
-### Auto Fix
-
+Auto fix:
 node index.js --path ./test --fix-all
+
+---
+
+## 🧪 Example
+
+Input:
+function test() {
+console.log(user.name)
+}
+
+Output:
+
+* ❌ user undefined
+* ✅ fix applied
+
+---
 
 ## 📊 Output
 
 * CLI summary
-* report.json file
+* report.json
 
 ---
 
