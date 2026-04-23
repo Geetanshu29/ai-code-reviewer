@@ -1,1 +1,3 @@
-const user = { name: 'Default User' }; function test() { console.log(user.name); }
+function test(user) {
+  console.log(user.name);
+}
